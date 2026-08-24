@@ -24,7 +24,6 @@ def extract_words_with_positions(uploaded_file, page_num):
             words = page.extract_words()
             processed_words = []
             for w in words:
-                # Normalize lowercase to ignore casing shifts (e.g. DOHA vs Doha)
                 text_clean = w["text"].strip().lower()
                 if text_clean:
                     processed_words.append({
@@ -56,11 +55,11 @@ if file1 and file2:
             with pdfplumber.open(file1) as p1, pdfplumber.open(file2) as p2:
                 max_pages = min(len(p1.pages), len(p2.pages))
             
-            # Interactive highlight color selection (Clean Yellow)
+            # Highlight color configuration
             hl_color = st.color_picker("Choose Highlight Color", "#FFEB3B")
             hex_val = hl_color.lstrip('#')
             rgb = tuple(int(hex_val[i:i+2], 16) for i in (0, 2, 4))
-            bgr_color = (rgb, rgb, rgb)
+            bgr_color = (int(rgb[2]), int(rgb[1]), int(rgb[0])) # Correctly ordered BGR integer tuple
             
             for i in range(max_pages):
                 st.markdown(f"### 📄 Page {i + 1}")
@@ -74,36 +73,34 @@ if file1 and file2:
                 words1 = extract_words_with_positions(file1, i)
                 words2 = extract_words_with_positions(file2, i)
                 
-                # Extract sequence lists of cleaned text tokens
                 text_list1 = [w["text_clean"] for w in words1]
                 text_list2 = [w["text_clean"] for w in words2]
                 
-                # SequenceMatcher dynamically aligns blocks even if table items shift rows
                 matcher = difflib.SequenceMatcher(None, text_list1, text_list2)
                 
                 overlay1 = img1.copy()
                 overlay2 = img2.copy()
                 
-                # Scan structural opcodes to isolate changes symmetrically
                 for tag, i1, i2, j1, j2 in matcher.get_opcodes():
                     if tag != 'equal':
                         # Highlight changes on the Original Document (Left side)
                         for idx in range(i1, i2):
                             if idx < len(words1):
                                 b = words1[idx]["bbox"]
+                                # Fixed: Mapping [x0, top, x1, bottom] coordinates correctly
                                 cv2.rectangle(overlay1, (b[0], b[1]), (b[2], b[3]), bgr_color, -1)
                         
                         # Highlight changes on the Revised Document (Right side)
                         for idx in range(j1, j2):
                             if idx < len(words2):
                                 b = words2[idx]["bbox"]
+                                # Fixed: Mapping [x0, top, x1, bottom] coordinates correctly
                                 cv2.rectangle(overlay2, (b[0], b[1]), (b[2], b[3]), bgr_color, -1)
                 
-                # Blend overlays back for clean translucent highlighting
+                # Translucent opacity blend over the original high-resolution texts
                 final_img1 = cv2.addWeighted(img1, 0.7, overlay1, 0.3, 0)
                 final_img2 = cv2.addWeighted(img2, 0.7, overlay2, 0.3, 0)
                 
-                # Render clear side-by-side columns
                 disp_col1, disp_col2 = st.columns(2)
                 with disp_col1:
                     st.caption("Original Version (Differences Highlighted)")
