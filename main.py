@@ -66,9 +66,7 @@ if file1 and file2:
             hl_color = st.color_picker("Choose Highlight Color", "#FFEB3B")
             hex_val = hl_color.lstrip('#')
             rgb = tuple(int(hex_val[i:i+2], 16) for i in (0, 2, 4))
-            
-            # FIXED: Correctly unpack the tuple items into a proper standard BGR format for OpenCV
-            bgr_color = (int(rgb[2]), int(rgb[1]), int(rgb[0]))
+            bgr_color = (int(rgb[2]), int(rgb[1]), int(rgb[0])) # Corrected BGR sequence
             
             report_pages = []
             
@@ -119,8 +117,18 @@ if file1 and file2:
                     st.image(cv2.cvtColor(final_img2, cv2.COLOR_BGR2RGB), use_container_width=True)
                 st.markdown("---")
                 
-                # Combine original and revised layouts into a side-by-side image for the PDF report
-                side_by_side_canvas = np.hstack((final_img1, final_img2))
+                # FIXED: Resize second image to match the height of the first before concatenating
+                h1, w1 = final_img1.shape[:2]
+                h2, w2 = final_img2.shape[:2]
+                if h1 != h2:
+                    # Scale width proportionally to maintain aspect ratio without distortion
+                    new_w2 = int(w2 * h1 / h2)
+                    final_img2_resized = cv2.resize(final_img2, (new_w2, h1))
+                else:
+                    final_img2_resized = final_img2
+
+                # Combine original and resized layouts safely side-by-side for the PDF report
+                side_by_side_canvas = np.hstack((final_img1, final_img2_resized))
                 _, encoded_img = cv2.imencode(".png", side_by_side_canvas)
                 report_pages.append(encoded_img.tobytes())
             
