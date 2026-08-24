@@ -1,2 +1,5 @@
 streamlit
 pypdf
+pdf2image
+opencv-python-headless
+numpy
