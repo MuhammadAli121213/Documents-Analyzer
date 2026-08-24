@@ -5,7 +5,6 @@ import pdfplumber
 from pdf2image import convert_from_bytes
 from collections import defaultdict
 import img2pdf
-import io
 
 def get_clean_page_image(uploaded_file, page_num):
     """Renders a PDF page to a high-resolution, clear image (300 DPI)."""
@@ -67,9 +66,10 @@ if file1 and file2:
             hl_color = st.color_picker("Choose Highlight Color", "#FFEB3B")
             hex_val = hl_color.lstrip('#')
             rgb = tuple(int(hex_val[i:i+2], 16) for i in (0, 2, 4))
-            bgr_color = (int(rgb), int(rgb), int(rgb))
             
-            # Temporary storage to build our downloadable side-by-side report
+            # FIXED: Correctly unpack the tuple items into a proper standard BGR format for OpenCV
+            bgr_color = (int(rgb[2]), int(rgb[1]), int(rgb[0]))
+            
             report_pages = []
             
             for i in range(max_pages):
@@ -94,7 +94,7 @@ if file1 and file2:
                     for w1 in r1:
                         if w1["text_clean"] not in row_text_v2:
                             b = w1["bbox"]
-                            cv2.rectangle(overlay1, (b, b), (b, b), bgr_color, -1)
+                            cv2.rectangle(overlay1, (b[0], b[1]), (b[2], b[3]), bgr_color, -1)
                 
                 # Check Document 2 vs Document 1 row records
                 for r2 in rows2:
@@ -104,7 +104,7 @@ if file1 and file2:
                     for w2 in r2:
                         if w2["text_clean"] not in row_text_v1:
                             b = w2["bbox"]
-                            cv2.rectangle(overlay2, (b, b), (b, b), bgr_color, -1)
+                            cv2.rectangle(overlay2, (b[0], b[1]), (b[2], b[3]), bgr_color, -1)
                 
                 final_img1 = cv2.addWeighted(img1, 0.75, overlay1, 0.25, 0)
                 final_img2 = cv2.addWeighted(img2, 0.75, overlay2, 0.25, 0)
