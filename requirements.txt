@@ -5,3 +5,5 @@ opencv-python-headless
 numpy
 pdfplumber
 img2pdf
+streamlit-drawable-canvas
+Pillow
