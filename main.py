@@ -14,34 +14,35 @@ def get_clean_page_image(uploaded_file, page_num):
         return cv2.cvtColor(np.array(images[page_num]), cv2.COLOR_RGB2BGR)
     return None
 
-def extract_characters_with_positions(uploaded_file, page_num):
-    """Extracts every individual character and its exact spatial coordinate."""
+def extract_words_with_positions(uploaded_file, page_num):
+    """Extracts whole text words along with their clean spatial coordinates."""
     uploaded_file.seek(0)
     with pdfplumber.open(uploaded_file) as pdf:
         if page_num < len(pdf.pages):
             page = pdf.pages[page_num]
-            scale = 300 / 72  # Convert standard PDF points to 300 DPI canvas pixels
+            scale = 300 / 72  # Map standard 72 DPI PDF coordinates to 300 DPI high-res canvas
             
-            chars = page.chars
-            processed_chars = []
-            for c in chars:
-                text_clean = c["text"]
-                processed_chars.append({
-                    "text": text_clean,
-                    "text_lower": text_clean.lower(),
-                    "bbox": [
-                        int(c["x0"] * scale),
-                        int(c["top"] * scale),
-                        int(c["x1"] * scale),
-                        int(c["bottom"] * scale)
-                    ]
-                })
-            return processed_chars
+            words = page.extract_words()
+            processed_words = []
+            for w in words:
+                text_clean = w["text"].strip()
+                if text_clean:
+                    processed_words.append({
+                        "text": text_clean,
+                        "text_lower": text_clean.lower(),
+                        "bbox": [
+                            int(w["x0"] * scale),
+                            int(w["top"] * scale),
+                            int(w["x1"] * scale),
+                            int(w["bottom"] * scale)
+                        ]
+                    })
+            return processed_words
     return []
 
-st.set_page_config(page_title="Sequence PDF Comparator", layout="wide")
-st.title("📄 High-Precision Text Sequence Comparator")
-st.write("Tracks exact character additions, deletions, and alterations on both documents side-by-side.")
+st.set_page_config(page_title="High-Res PDF Comparator", layout="wide")
+st.title("📄 High-Resolution Document Comparison")
+st.write("Compare text changes side-by-side with clear, sharp text rendering and targeted highlights.")
 
 col_up1, col_up2 = st.columns(2)
 with col_up1:
@@ -59,7 +60,7 @@ if file1 and file2:
             hex_val = hl_color.lstrip('#')
             rgb = tuple(int(hex_val[i:i+2], 16) for i in (0, 2, 4))
             
-            # FIXED: Correctly unpack the tuple items individually into BGR values
+            # Unpack color properly for OpenCV (BGR Format)
             bgr_color = (int(rgb[2]), int(rgb[1]), int(rgb[0]))
             
             report_pages = []
@@ -72,11 +73,11 @@ if file1 and file2:
                 if img1 is None or img2 is None:
                     continue
                 
-                chars1 = extract_characters_with_positions(file1, i)
-                chars2 = extract_characters_with_positions(file2, i)
+                words1 = extract_words_with_positions(file1, i)
+                words2 = extract_words_with_positions(file2, i)
                 
-                str1 = [c["text_lower"] for c in chars1]
-                str2 = [c["text_lower"] for c in chars2]
+                str1 = [w["text_lower"] for w in words1]
+                str2 = [w["text_lower"] for w in words2]
                 
                 matcher = difflib.SequenceMatcher(None, str1, str2)
                 
@@ -85,32 +86,33 @@ if file1 and file2:
                 
                 for tag, i1, i2, j1, j2 in matcher.get_opcodes():
                     if tag != 'equal':
-                        # Highlights: Left Side Changes
+                        # Highlight discrepancies on the Original Document (Left side)
                         for idx in range(i1, i2):
-                            if idx < len(chars1):
-                                b = chars1[idx]["bbox"]
+                            if idx < len(words1):
+                                b = words1[idx]["bbox"]
                                 cv2.rectangle(overlay1, (b[0], b[1]), (b[2], b[3]), bgr_color, -1)
                         
-                        # Highlights: Right Side Changes
+                        # Highlight discrepancies on the Revised Document (Right side)
                         for idx in range(j1, j2):
-                            if idx < len(chars2):
-                                b = chars2[idx]["bbox"]
+                            if idx < len(words2):
+                                b = words2[idx]["bbox"]
                                 cv2.rectangle(overlay2, (b[0], b[1]), (b[2], b[3]), bgr_color, -1)
                 
-                final_img1 = cv2.addWeighted(img1, 0.75, overlay1, 0.25, 0)
-                final_img2 = cv2.addWeighted(img2, 0.75, overlay2, 0.25, 0)
+                # Fixed Alpha Blend values: 0.5/0.5 ratio preserves sharp high-contrast yellow tags clearly
+                final_img1 = cv2.addWeighted(img1, 0.5, overlay1, 0.5, 0)
+                final_img2 = cv2.addWeighted(img2, 0.5, overlay2, 0.5, 0)
                 
-                # Screen visualization output
+                # Render clear side-by-side columns
                 disp_col1, disp_col2 = st.columns(2)
                 with disp_col1:
-                    st.caption("Original Version")
+                    st.caption("Original Version (Differences Highlighted)")
                     st.image(cv2.cvtColor(final_img1, cv2.COLOR_BGR2RGB), use_container_width=True)
                 with disp_col2:
-                    st.caption("Revised Version")
+                    st.caption("Revised Version (Differences Highlighted)")
                     st.image(cv2.cvtColor(final_img2, cv2.COLOR_BGR2RGB), use_container_width=True)
                 st.markdown("---")
                 
-                # Dimension normalization to prevent hstack report rendering crashes
+                # Combine original and revised layouts into a side-by-side image for the PDF report
                 h1, w1 = final_img1.shape[:2]
                 h2, w2 = final_img2.shape[:2]
                 if h1 != h2:
@@ -135,6 +137,6 @@ if file1 and file2:
                 st.sidebar.success("Report generation ready in sidebar!")
                 
         except Exception as e:
-            st.error(f"Error executing sequence matrix verification: {e}")
+            st.error(f"Error executing comparison sequence: {e}")
 else:
-    st.info("Upload your document versions to map targeted line modifications.")
+    st.info("Upload two PDF files to observe matching highlights side-by-side.")
