@@ -5,6 +5,7 @@ import pdfplumber
 from pdf2image import convert_from_bytes
 import difflib
 import img2pdf
+from PIL import Image
 
 # --- MONKEY PATCH TO FIX STREAMLIT VERSION COMPATIBILITY ---
 import streamlit.elements.image as st_image
@@ -114,11 +115,14 @@ if file1 and file2:
                 base_processed1 = cv2.addWeighted(img1, 0.6, auto_overlay1, 0.4, 0)
                 base_processed2 = cv2.addWeighted(img2, 0.6, auto_overlay2, 0.4, 0)
                 
-                # Convert back to RGB for PIL canvas insertion
+                # Convert back to RGB format
                 from_array_rgb = cv2.cvtColor(base_processed1, cv2.COLOR_BGR2RGB)
                 from_array_rgb_2 = cv2.cvtColor(base_processed2, cv2.COLOR_BGR2RGB)
                 
-                # FIXED: Extract clean, singular integer values for height and width dimensions
+                # FIXED: Force layout matrices into standard PIL Image objects to prevent truth value array crash
+                pil_background1 = Image.fromarray(from_array_rgb)
+                pil_background2 = Image.fromarray(from_array_rgb_2)
+                
                 img_h, img_w = base_processed1.shape[:2]
                 
                 disp_col1, disp_col2 = st.columns(2)
@@ -129,7 +133,7 @@ if file1 and file2:
                         fill_color="rgba(255, 87, 34, 0.2)",
                         stroke_width=stroke_width,
                         stroke_color=full_stroke_color,
-                        background_image=from_array_rgb,
+                        background_image=pil_background1,
                         height=img_h,
                         width=img_w,
                         drawing_mode=drawing_mode,
@@ -142,7 +146,7 @@ if file1 and file2:
                         fill_color="rgba(255, 87, 34, 0.2)",
                         stroke_width=stroke_width,
                         stroke_color=full_stroke_color,
-                        background_image=from_array_rgb_2,
+                        background_image=pil_background2,
                         height=img_h,
                         width=img_w,
                         drawing_mode=drawing_mode,
