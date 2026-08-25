@@ -3,7 +3,8 @@ import numpy as np
 import cv2
 import pdfplumber
 from pdf2image import convert_from_bytes
-import difflib
+from streamlit_drawable_canvas import st_canvas
+from PIL import Image
 import img2pdf
 
 def get_clean_page_image(uploaded_file, page_num):
@@ -11,38 +12,22 @@ def get_clean_page_image(uploaded_file, page_num):
     uploaded_file.seek(0)
     images = convert_from_bytes(uploaded_file.read(), dpi=300)
     if page_num < len(images):
-        return cv2.cvtColor(np.array(images[page_num]), cv2.COLOR_RGB2BGR)
+        # Return as standard PIL Image for the interactive canvas tool
+        return images[page_num]
     return None
 
-def extract_words_with_positions(uploaded_file, page_num):
-    """Extracts whole text words along with their clean spatial coordinates."""
-    uploaded_file.seek(0)
-    with pdfplumber.open(uploaded_file) as pdf:
-        if page_num < len(pdf.pages):
-            page = pdf.pages[page_num]
-            scale = 300 / 72  # Map standard 72 DPI PDF coordinates to 300 DPI high-res canvas
-            
-            words = page.extract_words()
-            processed_words = []
-            for w in words:
-                text_clean = w["text"].strip()
-                if text_clean:
-                    processed_words.append({
-                        "text": text_clean,
-                        "text_lower": text_clean.lower(),
-                        "bbox": [
-                            int(w["x0"] * scale),
-                            int(w["top"] * scale),
-                            int(w["x1"] * scale),
-                            int(w["bottom"] * scale)
-                        ]
-                    })
-            return processed_words
-    return []
+st.set_page_config(page_title="Interactive PDF Highlights Editor", layout="wide")
+st.title("✍️ Interactive Document Comparison & Manual Highlighter")
+st.write("Review your document structures side-by-side. Use the drawing controls to manually highlight differences.")
 
-st.set_page_config(page_title="High-Res PDF Comparator", layout="wide")
-st.title("📄 High-Resolution Document Comparison")
-st.write("Compare text changes side-by-side with clear, sharp text rendering and targeted highlights.")
+# Setup controls in the sidebar tool panel
+st.sidebar.subheader("🖌️ Highlight Controls")
+drawing_mode = st.sidebar.selectbox("Tool:", ("freedraw", "rect", "transform"))
+stroke_width = st.sidebar.slider("Brush Size / Thickness:", 1, 50, 20)
+stroke_color = st.sidebar.color_picker("Highlight Color:", "#FFEB3B")
+# Add a translucent opacity alpha to the hex code so text remains perfectly legible underneath markings
+alpha_hex = "80"  # 50% transparency layer
+full_stroke_color = f"{stroke_color}{alpha_hex}"
 
 col_up1, col_up2 = st.columns(2)
 with col_up1:
@@ -51,92 +36,96 @@ with col_up2:
     file2 = st.file_uploader("Upload Revised PDF", type=["pdf"])
 
 if file1 and file2:
-    with st.spinner("Analyzing text sequences..."):
-        try:
-            with pdfplumber.open(file1) as p1, pdfplumber.open(file2) as p2:
-                max_pages = min(len(p1.pages), len(p2.pages))
+    try:
+        with pdfplumber.open(file1) as p1, pdfplumber.open(file2) as p2:
+            max_pages = min(len(p1.pages), len(p2.pages))
+        
+        report_pages = []
+        
+        for i in range(max_pages):
+            st.markdown(f"### 📄 Page {i + 1}")
             
-            hl_color = st.color_picker("Choose Highlight Color", "#FFEB3B")
-            hex_val = hl_color.lstrip('#')
-            rgb = tuple(int(hex_val[i:i+2], 16) for i in (0, 2, 4))
+            img1_pil = get_clean_page_image(file1, i)
+            img2_pil = get_clean_page_image(file2, i)
             
-            # Unpack color properly for OpenCV (BGR Format)
-            bgr_color = (int(rgb[2]), int(rgb[1]), int(rgb[0]))
+            if img1_pil is None or img2_pil is None:
+                continue
+                
+            disp_col1, disp_col2 = st.columns(2)
             
-            report_pages = []
+            # Interactive Canvas for the Original Document (Left)
+            with disp_col1:
+                st.caption("Original Version (Draw / Highlight here)")
+                canvas_original = st_canvas(
+                    fill_color="rgba(255, 235, 59, 0.3)",  # semi-transparent fill for box tools
+                    stroke_width=stroke_width,
+                    stroke_color=full_stroke_color,
+                    background_image=img1_pil,
+                    update_streamlit=True,
+                    height=img1_pil.height,
+                    width=img1_pil.width,
+                    drawing_mode=drawing_mode,
+                    key=f"canvas_orig_{i}",
+                )
             
-            for i in range(max_pages):
-                st.markdown(f"### 📄 Page {i + 1}")
+            # Interactive Canvas for the Revised Document (Right)
+            with disp_col2:
+                st.caption("Revised Version (Draw / Highlight here)")
+                canvas_revised = st_canvas(
+                    fill_color="rgba(255, 235, 59, 0.3)",
+                    stroke_width=stroke_width,
+                    stroke_color=full_stroke_color,
+                    background_image=img2_pil,
+                    update_streamlit=True,
+                    height=img2_pil.height,
+                    width=img2_pil.width,
+                    drawing_mode=drawing_mode,
+                    key=f"canvas_rev_{i}",
+                )
+            
+            # Flatten background sheets and manually drawn vectors together to build export data
+            if canvas_original.image_data is not None and canvas_revised.image_data is not None:
+                # Convert canvas layer modifications to OpenCV arrays
+                orig_bg = cv2.cvtColor(np.array(img1_pil), cv2.COLOR_RGB2BGR)
+                rev_bg = cv2.cvtColor(np.array(img2_pil), cv2.COLOR_RGB2BGR)
                 
-                img1 = get_clean_page_image(file1, i)
-                img2 = get_clean_page_image(file2, i)
-                if img1 is None or img2 is None:
-                    continue
+                # Extract drawn lines
+                orig_draw = cv2.cvtColor(canvas_original.image_data, cv2.COLOR_RGBA2BGRA)
+                rev_draw = cv2.cvtColor(canvas_revised.image_data, cv2.COLOR_RGBA2BGRA)
                 
-                words1 = extract_words_with_positions(file1, i)
-                words2 = extract_words_with_positions(file2, i)
+                # Overlay manually drawn markings on top of the original text templates
+                for c in range(0, 3):
+                    orig_bg[:, :, c] = orig_bg[:, :, c] * (1 - orig_draw[:, :, 3] / 255.0) + orig_draw[:, :, c] * (orig_draw[:, :, 3] / 255.0)
+                    rev_bg[:, :, c] = rev_bg[:, :, c] * (1 - rev_draw[:, :, 3] / 255.0) + rev_draw[:, :, c] * (rev_draw[:, :, 3] / 255.0)
                 
-                str1 = [w["text_lower"] for w in words1]
-                str2 = [w["text_lower"] for w in words2]
-                
-                matcher = difflib.SequenceMatcher(None, str1, str2)
-                
-                overlay1 = img1.copy()
-                overlay2 = img2.copy()
-                
-                for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-                    if tag != 'equal':
-                        # Highlight discrepancies on the Original Document (Left side)
-                        for idx in range(i1, i2):
-                            if idx < len(words1):
-                                b = words1[idx]["bbox"]
-                                cv2.rectangle(overlay1, (b[0], b[1]), (b[2], b[3]), bgr_color, -1)
-                        
-                        # Highlight discrepancies on the Revised Document (Right side)
-                        for idx in range(j1, j2):
-                            if idx < len(words2):
-                                b = words2[idx]["bbox"]
-                                cv2.rectangle(overlay2, (b[0], b[1]), (b[2], b[3]), bgr_color, -1)
-                
-                # Fixed Alpha Blend values: 0.5/0.5 ratio preserves sharp high-contrast yellow tags clearly
-                final_img1 = cv2.addWeighted(img1, 0.5, overlay1, 0.5, 0)
-                final_img2 = cv2.addWeighted(img2, 0.5, overlay2, 0.5, 0)
-                
-                # Render clear side-by-side columns
-                disp_col1, disp_col2 = st.columns(2)
-                with disp_col1:
-                    st.caption("Original Version (Differences Highlighted)")
-                    st.image(cv2.cvtColor(final_img1, cv2.COLOR_BGR2RGB), use_container_width=True)
-                with disp_col2:
-                    st.caption("Revised Version (Differences Highlighted)")
-                    st.image(cv2.cvtColor(final_img2, cv2.COLOR_BGR2RGB), use_container_width=True)
-                st.markdown("---")
-                
-                # Combine original and revised layouts into a side-by-side image for the PDF report
-                h1, w1 = final_img1.shape[:2]
-                h2, w2 = final_img2.shape[:2]
+                # Normalize sheet height differentials safely prior to final export rendering
+                h1, w1 = orig_bg.shape[:2]
+                h2, w2 = rev_bg.shape[:2]
                 if h1 != h2:
                     new_w2 = int(w2 * h1 / h2)
-                    final_img2_resized = cv2.resize(final_img2, (new_w2, h1))
+                    rev_bg_resized = cv2.resize(rev_bg, (new_w2, h1))
                 else:
-                    final_img2_resized = final_img2
-
-                side_by_side_canvas = np.hstack((final_img1, final_img2_resized))
+                    rev_bg_resized = rev_bg
+                
+                side_by_side_canvas = np.hstack((orig_bg, rev_bg_resized))
                 _, encoded_img = cv2.imencode(".png", side_by_side_canvas)
                 report_pages.append(encoded_img.tobytes())
-            
-            if report_pages:
-                pdf_data = img2pdf.convert(report_pages)
-                st.sidebar.subheader("📥 Export Options")
-                st.sidebar.download_button(
-                    label="Download Comparison Report (PDF)",
-                    data=pdf_data,
-                    file_name="document_comparison_report.pdf",
-                    mime="application/pdf"
-                )
-                st.sidebar.success("Report generation ready in sidebar!")
                 
-        except Exception as e:
-            st.error(f"Error executing comparison sequence: {e}")
+            st.markdown("---")
+            
+        # Output interactive saved data download actions
+        if report_pages:
+            pdf_data = img2pdf.convert(report_pages)
+            st.sidebar.subheader("📥 Export Options")
+            st.sidebar.download_button(
+                label="Download Edited Report (PDF)",
+                data=pdf_data,
+                file_name="manual_highlight_report.pdf",
+                mime="application/pdf"
+            )
+            st.sidebar.success("Export compilation prepared!")
+            
+    except Exception as e:
+        st.error(f"Error initializing workspace framework canvas: {e}")
 else:
-    st.info("Upload two PDF files to observe matching highlights side-by-side.")
+    st.info("Upload your document sets to enable custom visual editing tools.")
