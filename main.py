@@ -119,36 +119,32 @@ if file1 and file2:
                 from_array_rgb = cv2.cvtColor(base_processed1, cv2.COLOR_BGR2RGB)
                 from_array_rgb_2 = cv2.cvtColor(base_processed2, cv2.COLOR_BGR2RGB)
                 
-                # FIXED: Force layout matrices into standard PIL Image objects to prevent truth value array crash
+                # Force layouts into structured PIL images
                 pil_background1 = Image.fromarray(from_array_rgb)
                 pil_background2 = Image.fromarray(from_array_rgb_2)
-                
-                img_h, img_w = base_processed1.shape[:2]
                 
                 disp_col1, disp_col2 = st.columns(2)
                 
                 with disp_col1:
                     st.caption("Original Version (Auto-Highlighted + Manual Editor)")
+                    # FIXED: Canvas automatically uses the background image dimensions internally
                     canvas1 = st_canvas(
                         fill_color="rgba(255, 87, 34, 0.2)",
                         stroke_width=stroke_width,
                         stroke_color=full_stroke_color,
                         background_image=pil_background1,
-                        height=img_h,
-                        width=img_w,
                         drawing_mode=drawing_mode,
                         key=f"c_orig_{i}",
                     )
                 
                 with disp_col2:
                     st.caption("Revised Version (Auto-Highlighted + Manual Editor)")
+                    # FIXED: Canvas automatically uses the background image dimensions internally
                     canvas2 = st_canvas(
                         fill_color="rgba(255, 87, 34, 0.2)",
                         stroke_width=stroke_width,
                         stroke_color=full_stroke_color,
                         background_image=pil_background2,
-                        height=img_h,
-                        width=img_w,
                         drawing_mode=drawing_mode,
                         key=f"c_rev_{i}",
                     )
