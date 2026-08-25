@@ -1,196 +1,785 @@
 import streamlit as st
-import numpy as np
-import cv2
-import pdfplumber
-from pdf2image import convert_from_bytes
+import fitz  # PyMuPDF
 import difflib
-import img2pdf
-from PIL import Image
+import re
+import io
+from datetime import datetime
 
-# --- MONKEY PATCH TO FIX STREAMLIT VERSION COMPATIBILITY ---
-import streamlit.elements.image as st_image
-if not hasattr(st_image, "image_to_url"):
-    try:
-        from streamlit.elements.lib.image_utils import image_to_url
-        setattr(st_image, "image_to_url", image_to_url)
-    except ImportError:
-        pass
 
-# Safe to load drawing tools now
-from streamlit_drawable_canvas import st_canvas
+# ============================================================
+# PAGE CONFIGURATION
+# ============================================================
 
-def get_clean_page_image(uploaded_file, page_num):
-    """Renders a PDF page to a high-resolution, clear image (300 DPI)."""
-    uploaded_file.seek(0)
-    images = convert_from_bytes(uploaded_file.read(), dpi=300)
-    if page_num < len(images):
-        return cv2.cvtColor(np.array(images[page_num]), cv2.COLOR_RGB2BGR)
-    return None
+st.set_page_config(
+    page_title="PDF Document Comparison & Editor",
+    page_icon="📄",
+    layout="wide"
+)
 
-def extract_words_with_positions(uploaded_file, page_num):
-    """Extracts whole text words along with their clean spatial coordinates."""
-    uploaded_file.seek(0)
-    with pdfplumber.open(uploaded_file) as pdf:
-        if page_num < len(pdf.pages):
-            page = pdf.pages[page_num]
-            scale = 300 / 72  # Map standard 72 DPI PDF coordinates to 300 DPI high-res canvas
-            
-            words = page.extract_words()
-            processed_words = []
-            for w in words:
-                text_clean = w["text"].strip()
-                if text_clean:
-                    processed_words.append({
-                        "text": text_clean,
-                        "text_lower": text_clean.lower(),
-                        "bbox": [
-                            int(w["x0"] * scale),
-                            int(w["top"] * scale),
-                            int(w["x1"] * scale),
-                            int(w["bottom"] * scale)
-                        ]
-                    })
-            return processed_words
-    return []
 
-st.set_page_config(page_title="High-Res PDF Comparator", layout="wide")
-st.title("📄 Hybrid PDF Comparator & Editing Workspace")
-st.write("Differences are auto-highlighted below. Use the canvas sidebar tools to add your own markup manually.")
+# ============================================================
+# PDF TEXT EXTRACTION
+# ============================================================
 
-# Sidebar Manual Settings
-st.sidebar.subheader("🖌️ Manual Editor Options")
-drawing_mode = st.sidebar.selectbox("Drawing Tool:", ("freedraw", "rect", "transform"))
-stroke_width = st.sidebar.slider("Brush Size:", 1, 50, 15)
-stroke_color = st.sidebar.color_picker("Manual Marker Color:", "#FF5722") # Orange for manual edits
-alpha_hex = "80"  # Transparent brush visibility
-full_stroke_color = f"{stroke_color}{alpha_hex}"
+def extract_pdf_text(pdf_bytes):
+    """Extract all text from a PDF."""
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
 
-col_up1, col_up2 = st.columns(2)
-with col_up1:
-    file1 = st.file_uploader("Upload Original PDF", type=["pdf"])
-with col_up2:
-    file2 = st.file_uploader("Upload Revised PDF", type=["pdf"])
+    pages = []
 
-if file1 and file2:
-    with st.spinner("Analyzing text sequences and building layers..."):
-        try:
-            with pdfplumber.open(file1) as p1, pdfplumber.open(file2) as p2:
-                max_pages = min(len(p1.pages), len(p2.pages))
-            
-            report_pages = []
-            
-            for i in range(max_pages):
-                st.markdown(f"### 📄 Page {i + 1}")
-                
-                img1 = get_clean_page_image(file1, i)
-                img2 = get_clean_page_image(file2, i)
-                if img1 is None or img2 is None:
-                    continue
-                
-                words1 = extract_words_with_positions(file1, i)
-                words2 = extract_words_with_positions(file2, i)
-                
-                str1 = [w["text_lower"] for w in words1]
-                str2 = [w["text_lower"] for w in words2]
-                
-                matcher = difflib.SequenceMatcher(None, str1, str2)
-                
-                # Create automatic yellow background highlights
-                auto_overlay1 = img1.copy()
-                auto_overlay2 = img2.copy()
-                yellow_bgr = (0, 235, 255) # Bright Yellow
-                
-                for tag, i1, i2, j1, j2 in matcher.get_opcodes():
-                    if tag != 'equal':
-                        for idx in range(i1, i2):
-                            if idx < len(words1):
-                                b = words1[idx]["bbox"]
-                                cv2.rectangle(auto_overlay1, (b, b), (b, b), yellow_bgr, -1)
-                        for idx in range(j1, j2):
-                            if idx < len(words2):
-                                b = words2[idx]["bbox"]
-                                cv2.rectangle(auto_overlay2, (b, b), (b, b), yellow_bgr, -1)
-                
-                # Blend the auto highlights into clean translucent sheets
-                base_processed1 = cv2.addWeighted(img1, 0.6, auto_overlay1, 0.4, 0)
-                base_processed2 = cv2.addWeighted(img2, 0.6, auto_overlay2, 0.4, 0)
-                
-                # Convert back to RGB format
-                from_array_rgb = cv2.cvtColor(base_processed1, cv2.COLOR_BGR2RGB)
-                from_array_rgb_2 = cv2.cvtColor(base_processed2, cv2.COLOR_BGR2RGB)
-                
-                # Force layouts into structured PIL images
-                pil_background1 = Image.fromarray(from_array_rgb)
-                pil_background2 = Image.fromarray(from_array_rgb_2)
-                
-                # Extract explicit dimensional parameters from PIL object references
-                canvas_h = int(pil_background1.height)
-                canvas_w = int(pil_background1.width)
-                
-                disp_col1, disp_col2 = st.columns(2)
-                
-                with disp_col1:
-                    st.caption("Original Version (Auto-Highlighted + Manual Editor)")
-                    # FIXED: Passing explicit object properties safely handles library internal queries
-                    canvas1 = st_canvas(
-                        fill_color="rgba(255, 87, 34, 0.2)",
-                        stroke_width=stroke_width,
-                        stroke_color=full_stroke_color,
-                        background_image=pil_background1,
-                        height=canvas_h,
-                        width=canvas_w,
-                        drawing_mode=drawing_mode,
-                        key=f"c_orig_{i}",
-                    )
-                
-                with disp_col2:
-                    st.caption("Revised Version (Auto-Highlighted + Manual Editor)")
-                    # FIXED: Passing explicit object properties safely handles library internal queries
-                    canvas2 = st_canvas(
-                        fill_color="rgba(255, 87, 34, 0.2)",
-                        stroke_width=stroke_width,
-                        stroke_color=full_stroke_color,
-                        background_image=pil_background2,
-                        height=canvas_h,
-                        width=canvas_w,
-                        drawing_mode=drawing_mode,
-                        key=f"c_rev_{i}",
-                    )
-                
-                # Process combined outputs for downloads
-                if canvas1.image_data is not None and canvas2.image_data is not None:
-                    out_img1 = base_processed1.copy()
-                    out_img2 = base_processed2.copy()
-                    
-                    draw1 = cv2.cvtColor(canvas1.image_data, cv2.COLOR_RGBA2BGRA)
-                    draw2 = cv2.cvtColor(canvas2.image_data, cv2.COLOR_RGBA2BGRA)
-                    
-                    for c in range(0, 3):
-                        out_img1[:, :, c] = out_img1[:, :, c] * (1 - draw1[:, :, 3] / 255.0) + draw1[:, :, c] * (draw1[:, :, 3] / 255.0)
-                        out_img2[:, :, c] = out_img2[:, :, c] * (1 - draw2[:, :, 3] / 255.0) + draw2[:, :, c] * (draw2[:, :, 3] / 255.0)
-                    
-                    h1, w1 = out_img1.shape[:2]
-                    h2, w2 = out_img2.shape[:2]
-                    if h1 != h2:
-                        out_img2 = cv2.resize(out_img2, (int(w2 * h1 / h2), h1))
-                    
-                    side_by_side = np.hstack((out_img1, out_img2))
-                    _, encoded_img = cv2.imencode(".png", side_by_side)
-                    report_pages.append(encoded_img.tobytes())
-                st.markdown("---")
-                
-            if report_pages:
-                pdf_data = img2pdf.convert(report_pages)
-                st.sidebar.subheader("📥 Export Options")
-                st.sidebar.download_button(
-                    label="Download Complete Report (PDF)",
-                    data=pdf_data,
-                    file_name="hybrid_comparison_report.pdf",
-                    mime="application/pdf"
+    for page_number, page in enumerate(doc):
+        text = page.get_text("text")
+
+        pages.append({
+            "page": page_number + 1,
+            "text": text
+        })
+
+    doc.close()
+
+    return pages
+
+
+def get_full_text(pdf_bytes):
+    """Combine all PDF pages into one text string."""
+    pages = extract_pdf_text(pdf_bytes)
+
+    return "\n\n".join(
+        f"--- PAGE {p['page']} ---\n{p['text']}"
+        for p in pages
+    )
+
+
+# ============================================================
+# TEXT COMPARISON
+# ============================================================
+
+def compare_text(text1, text2):
+    """
+    Compare two documents using word-level comparison.
+    """
+
+    words1 = re.findall(r"\S+", text1)
+    words2 = re.findall(r"\S+", text2)
+
+    matcher = difflib.SequenceMatcher(None, words1, words2)
+
+    differences = []
+
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+
+        if tag == "equal":
+            continue
+
+        differences.append({
+            "type": tag,
+            "old_text": " ".join(words1[i1:i2]),
+            "new_text": " ".join(words2[j1:j2])
+        })
+
+    return differences
+
+
+def generate_diff_html(text1, text2):
+    """
+    Create HTML showing differences between documents.
+    """
+
+    words1 = re.findall(r"\S+", text1)
+    words2 = re.findall(r"\S+", text2)
+
+    matcher = difflib.SequenceMatcher(None, words1, words2)
+
+    html_parts = []
+
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+
+        if tag == "equal":
+
+            html_parts.append(
+                " ".join(words1[i1:i2])
+            )
+
+        elif tag == "delete":
+
+            html_parts.append(
+                f'<span style="background-color:#ffcccc;'
+                f'text-decoration:line-through;">'
+                f'{" ".join(words1[i1:i2])}'
+                f'</span>'
+            )
+
+        elif tag == "insert":
+
+            html_parts.append(
+                f'<span style="background-color:#ccffcc;">'
+                f'{" ".join(words2[j1:j2])}'
+                f'</span>'
+            )
+
+        elif tag == "replace":
+
+            html_parts.append(
+                f'<span style="background-color:#ffcccc;'
+                f'text-decoration:line-through;">'
+                f'{" ".join(words1[i1:i2])}'
+                f'</span> '
+                f'<span style="background-color:#ccffcc;">'
+                f'{" ".join(words2[j1:j2])}'
+                f'</span>'
+            )
+
+    return " ".join(html_parts)
+
+
+# ============================================================
+# FIND TEXT LOCATIONS IN PDF
+# ============================================================
+
+def find_text_in_pdf(pdf_bytes, search_text):
+    """
+    Find exact text inside a PDF and return its page and coordinates.
+    """
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+    results = []
+
+    for page_index, page in enumerate(doc):
+
+        rectangles = page.search_for(search_text)
+
+        for rect in rectangles:
+
+            results.append({
+                "page": page_index + 1,
+                "rect": rect,
+                "page_index": page_index
+            })
+
+    doc.close()
+
+    return results
+
+
+# ============================================================
+# REPLACE TEXT IN PDF
+# ============================================================
+
+def replace_text_in_pdf(
+    pdf_bytes,
+    search_text,
+    replacement_text,
+    page_number=None
+):
+    """
+    Replace text in a PDF using redaction + inserted text.
+
+    This preserves the page but may require manual adjustment
+    when replacement text is longer than the original.
+    """
+
+    doc = fitz.open(
+        stream=pdf_bytes,
+        filetype="pdf"
+    )
+
+    replacement_count = 0
+
+    for page_index, page in enumerate(doc):
+
+        if page_number is not None:
+            if page_index + 1 != page_number:
+                continue
+
+        matches = page.search_for(search_text)
+
+        for rect in matches:
+
+            # Redact original text
+            page.add_redact_annot(
+                rect,
+                fill=(1, 1, 1)
+            )
+
+            replacement_count += 1
+
+        if matches:
+
+            page.apply_redactions()
+
+            for rect in matches:
+
+                # Slightly reduce the rectangle height
+                insert_rect = fitz.Rect(
+                    rect.x0,
+                    rect.y0,
+                    rect.x1,
+                    rect.y1 + 2
                 )
-                st.sidebar.success("Report compilation ready!")
-                
-        except Exception as e:
-            st.error(f"Error executing workspace canvas view: {e}")
-else:
-    st.info("Upload your document versions to load the hybrid dashboard.")
+
+                page.insert_textbox(
+                    insert_rect,
+                    replacement_text,
+                    fontsize=max(
+                        6,
+                        min(12, rect.height * 0.75)
+                    ),
+                    fontname="helv",
+                    color=(0, 0, 0),
+                    align=0
+                )
+
+    output = io.BytesIO()
+
+    doc.save(
+        output,
+        garbage=4,
+        deflate=True
+    )
+
+    doc.close()
+
+    return output.getvalue(), replacement_count
+
+
+# ============================================================
+# DOWNLOAD COMPARISON REPORT
+# ============================================================
+
+def create_comparison_report(differences):
+
+    report = []
+
+    report.append(
+        "PDF DOCUMENT COMPARISON REPORT"
+    )
+
+    report.append(
+        "=" * 60
+    )
+
+    report.append(
+        f"Generated: {datetime.now().strftime('%d-%m-%Y %H:%M')}"
+    )
+
+    report.append("")
+
+    if not differences:
+
+        report.append(
+            "No text differences detected."
+        )
+
+    else:
+
+        report.append(
+            f"Total differences: {len(differences)}"
+        )
+
+        report.append("")
+
+        for number, diff in enumerate(
+            differences,
+            start=1
+        ):
+
+            report.append(
+                f"Difference {number}"
+            )
+
+            report.append(
+                f"Type: {diff['type']}"
+            )
+
+            report.append(
+                f"Original: {diff['old_text']}"
+            )
+
+            report.append(
+                f"New: {diff['new_text']}"
+            )
+
+            report.append("-" * 60)
+
+    return "\n".join(report)
+
+
+# ============================================================
+# SESSION STATE
+# ============================================================
+
+if "edited_pdf" not in st.session_state:
+    st.session_state.edited_pdf = None
+
+if "replacement_count" not in st.session_state:
+    st.session_state.replacement_count = 0
+
+
+# ============================================================
+# HEADER
+# ============================================================
+
+st.title("📄 PDF Document Comparison & Editor")
+
+st.markdown(
+    """
+    **Compare contracts, agreements, letters and other PDF documents,
+    identify differences, and make controlled text replacements.**
+    """
+)
+
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+menu = st.sidebar.radio(
+    "System",
+    [
+        "🔍 Compare Documents",
+        "✏️ Edit PDF",
+        "📋 Document Information"
+    ]
+)
+
+
+# ============================================================
+# PAGE 1 — COMPARE DOCUMENTS
+# ============================================================
+
+if menu == "🔍 Compare Documents":
+
+    st.header("🔍 Compare Two Documents")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+
+        pdf1 = st.file_uploader(
+            "Upload Original Document",
+            type=["pdf"],
+            key="pdf_original"
+        )
+
+    with col2:
+
+        pdf2 = st.file_uploader(
+            "Upload Revised Document",
+            type=["pdf"],
+            key="pdf_revised"
+        )
+
+    if pdf1 and pdf2:
+
+        st.success(
+            "Both documents uploaded successfully."
+        )
+
+        compare_button = st.button(
+            "🔎 Compare Documents",
+            type="primary"
+        )
+
+        if compare_button:
+
+            with st.spinner(
+                "Reading and comparing documents..."
+            ):
+
+                original_bytes = pdf1.getvalue()
+                revised_bytes = pdf2.getvalue()
+
+                original_text = get_full_text(
+                    original_bytes
+                )
+
+                revised_text = get_full_text(
+                    revised_bytes
+                )
+
+                differences = compare_text(
+                    original_text,
+                    revised_text
+                )
+
+                st.session_state["original_text"] = original_text
+                st.session_state["revised_text"] = revised_text
+                st.session_state["differences"] = differences
+
+        if "differences" in st.session_state:
+
+            differences = st.session_state[
+                "differences"
+            ]
+
+            st.divider()
+
+            # ==================================================
+            # SUMMARY
+            # ==================================================
+
+            st.subheader("📊 Comparison Summary")
+
+            added = len([
+                d for d in differences
+                if d["type"] == "insert"
+            ])
+
+            removed = len([
+                d for d in differences
+                if d["type"] == "delete"
+            ])
+
+            changed = len([
+                d for d in differences
+                if d["type"] == "replace"
+            ])
+
+            c1, c2, c3, c4 = st.columns(4)
+
+            c1.metric(
+                "Total Differences",
+                len(differences)
+            )
+
+            c2.metric(
+                "Added",
+                added
+            )
+
+            c3.metric(
+                "Removed",
+                removed
+            )
+
+            c4.metric(
+                "Changed",
+                changed
+            )
+
+            # ==================================================
+            # DIFFERENCE TABLE
+            # ==================================================
+
+            st.subheader(
+                "📋 Detailed Differences"
+            )
+
+            if differences:
+
+                for number, diff in enumerate(
+                    differences,
+                    start=1
+                ):
+
+                    if diff["type"] == "insert":
+
+                        st.success(
+                            f"### Difference {number} — Added"
+                        )
+
+                        st.write(
+                            diff["new_text"]
+                        )
+
+                    elif diff["type"] == "delete":
+
+                        st.error(
+                            f"### Difference {number} — Removed"
+                        )
+
+                        st.write(
+                            diff["old_text"]
+                        )
+
+                    else:
+
+                        st.warning(
+                            f"### Difference {number} — Changed"
+                        )
+
+                        left, right = st.columns(2)
+
+                        with left:
+
+                            st.markdown(
+                                "**Original**"
+                            )
+
+                            st.error(
+                                diff["old_text"]
+                            )
+
+                        with right:
+
+                            st.markdown(
+                                "**Revised**"
+                            )
+
+                            st.success(
+                                diff["new_text"]
+                            )
+
+                    st.divider()
+
+            else:
+
+                st.success(
+                    "✅ No differences detected."
+                )
+
+            # ==================================================
+            # VISUAL DIFF
+            # ==================================================
+
+            st.subheader(
+                "🖍️ Visual Text Comparison"
+            )
+
+            diff_html = generate_diff_html(
+                st.session_state["original_text"],
+                st.session_state["revised_text"]
+            )
+
+            st.markdown(
+                f"""
+                <div style="
+                    padding:20px;
+                    border:1px solid #cccccc;
+                    border-radius:8px;
+                    line-height:1.8;
+                    font-size:16px;
+                    max-height:600px;
+                    overflow-y:auto;
+                ">
+                {diff_html}
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+            # ==================================================
+            # DOWNLOAD REPORT
+            # ==================================================
+
+            report = create_comparison_report(
+                differences
+            )
+
+            st.download_button(
+                "📥 Download Comparison Report",
+                data=report,
+                file_name="document_comparison_report.txt",
+                mime="text/plain"
+            )
+
+
+# ============================================================
+# PAGE 2 — PDF EDITOR
+# ============================================================
+
+elif menu == "✏️ Edit PDF":
+
+    st.header("✏️ Manual PDF Text Editor")
+
+    st.info(
+        """
+        Upload a PDF, search for existing text, and replace it.
+        The application redacts the original text and places the
+        replacement text in the same area.
+        """
+    )
+
+    editor_pdf = st.file_uploader(
+        "Upload PDF to Edit",
+        type=["pdf"],
+        key="editor_pdf"
+    )
+
+    if editor_pdf:
+
+        pdf_bytes = editor_pdf.getvalue()
+
+        doc = fitz.open(
+            stream=pdf_bytes,
+            filetype="pdf"
+        )
+
+        total_pages = len(doc)
+
+        doc.close()
+
+        st.success(
+            f"PDF loaded successfully — {total_pages} pages."
+        )
+
+        page_number = st.number_input(
+            "Page Number",
+            min_value=1,
+            max_value=total_pages,
+            value=1
+        )
+
+        search_text = st.text_input(
+            "Text to Find",
+            placeholder="Example: 31 December 2026"
+        )
+
+        replacement_text = st.text_input(
+            "Replace With",
+            placeholder="Example: 31 December 2027"
+        )
+
+        if search_text:
+
+            matches = find_text_in_pdf(
+                pdf_bytes,
+                search_text
+            )
+
+            if matches:
+
+                st.success(
+                    f"Found {len(matches)} occurrence(s)."
+                )
+
+                pages_found = sorted(
+                    set(
+                        m["page"]
+                        for m in matches
+                    )
+                )
+
+                st.write(
+                    "Found on page(s):",
+                    pages_found
+                )
+
+            else:
+
+                st.warning(
+                    "Text was not found in the PDF."
+                )
+
+        if st.button(
+            "✏️ Replace Text",
+            type="primary"
+        ):
+
+            if not search_text.strip():
+
+                st.error(
+                    "Please enter the text to find."
+                )
+
+            elif not replacement_text.strip():
+
+                st.error(
+                    "Please enter replacement text."
+                )
+
+            else:
+
+                with st.spinner(
+                    "Editing PDF..."
+                ):
+
+                    edited_pdf, count = (
+                        replace_text_in_pdf(
+                            pdf_bytes,
+                            search_text,
+                            replacement_text,
+                            page_number
+                        )
+                    )
+
+                if count > 0:
+
+                    st.session_state.edited_pdf = (
+                        edited_pdf
+                    )
+
+                    st.session_state.replacement_count = (
+                        count
+                    )
+
+                    st.success(
+                        f"Successfully replaced {count} occurrence(s)."
+                    )
+
+                else:
+
+                    st.error(
+                        "No matching text was found on this page."
+                    )
+
+        # ======================================================
+        # DOWNLOAD EDITED PDF
+        # ======================================================
+
+        if st.session_state.edited_pdf:
+
+            st.divider()
+
+            st.subheader(
+                "📥 Revised PDF"
+            )
+
+            st.download_button(
+                label="📥 Download Edited PDF",
+                data=st.session_state.edited_pdf,
+                file_name="revised_document.pdf",
+                mime="application/pdf"
+            )
+
+
+# ============================================================
+# PAGE 3 — DOCUMENT INFORMATION
+# ============================================================
+
+elif menu == "📋 Document Information":
+
+    st.header("📋 Document Information")
+
+    st.markdown(
+        """
+        ### Supported Functions
+
+        **Document Comparison**
+        - Compare two PDF documents
+        - Detect additions
+        - Detect removals
+        - Detect changed text
+        - Display comparison summary
+        - Generate comparison report
+
+        **PDF Editing**
+        - Search text inside PDF
+        - Find occurrences
+        - Select page
+        - Replace text
+        - Download revised PDF
+
+        ### Recommended Use
+
+        This system can be used for:
+
+        - Contract agreements
+        - Subcontract agreements
+        - Amendments
+        - Service agreements
+        - Supplier agreements
+        - NDA documents
+        - Policies
+        - Letters
+        - Commercial documents
+        """
+    )
+
+    st.warning(
+        """
+        Scanned/image-only PDFs require OCR before text comparison
+        or text replacement will work.
+        """
+    )
