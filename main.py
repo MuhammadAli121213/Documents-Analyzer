@@ -15,7 +15,7 @@ if not hasattr(st_image, "image_to_url"):
     except ImportError:
         pass
 
-# Now safe to import drawing tools
+# Safe to load drawing tools now
 from streamlit_drawable_canvas import st_canvas
 
 def get_clean_page_image(uploaded_file, page_num):
@@ -115,8 +115,11 @@ if file1 and file2:
                 base_processed2 = cv2.addWeighted(img2, 0.6, auto_overlay2, 0.4, 0)
                 
                 # Convert back to RGB for PIL canvas insertion
-                pil_img1 = from_array_rgb = cv2.cvtColor(base_processed1, cv2.COLOR_BGR2RGB)
-                pil_img2 = from_array_rgb_2 = cv2.cvtColor(base_processed2, cv2.COLOR_BGR2RGB)
+                from_array_rgb = cv2.cvtColor(base_processed1, cv2.COLOR_BGR2RGB)
+                from_array_rgb_2 = cv2.cvtColor(base_processed2, cv2.COLOR_BGR2RGB)
+                
+                # FIXED: Extract clean, singular integer values for height and width dimensions
+                img_h, img_w = base_processed1.shape[:2]
                 
                 disp_col1, disp_col2 = st.columns(2)
                 
@@ -127,8 +130,8 @@ if file1 and file2:
                         stroke_width=stroke_width,
                         stroke_color=full_stroke_color,
                         background_image=from_array_rgb,
-                        height=base_processed1.shape[0],
-                        width=base_processed1.shape[1],
+                        height=img_h,
+                        width=img_w,
                         drawing_mode=drawing_mode,
                         key=f"c_orig_{i}",
                     )
@@ -140,8 +143,8 @@ if file1 and file2:
                         stroke_width=stroke_width,
                         stroke_color=full_stroke_color,
                         background_image=from_array_rgb_2,
-                        height=base_processed2.shape[0],
-                        width=base_processed2.shape[1],
+                        height=img_h,
+                        width=img_w,
                         drawing_mode=drawing_mode,
                         key=f"c_rev_{i}",
                     )
