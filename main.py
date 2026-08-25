@@ -4,6 +4,7 @@ import cv2
 import pdfplumber
 from pdf2image import convert_from_bytes
 import difflib
+import img2pdf
 
 def get_clean_page_image(uploaded_file, page_num):
     """Renders a PDF page to a high-resolution, clear image (300 DPI)."""
@@ -25,7 +26,6 @@ def extract_characters_with_positions(uploaded_file, page_num):
             processed_chars = []
             for c in chars:
                 text_clean = c["text"]
-                # Store every character along with its exact layout box
                 processed_chars.append({
                     "text": text_clean,
                     "text_lower": text_clean.lower(),
@@ -58,7 +58,9 @@ if file1 and file2:
             hl_color = st.color_picker("Choose Highlight Color", "#FFEB3B")
             hex_val = hl_color.lstrip('#')
             rgb = tuple(int(hex_val[i:i+2], 16) for i in (0, 2, 4))
-            bgr_color = (int(rgb), int(rgb), int(rgb))
+            
+            # FIXED: Correctly unpack the tuple items individually into BGR values
+            bgr_color = (int(rgb[2]), int(rgb[1]), int(rgb[0]))
             
             report_pages = []
             
@@ -73,11 +75,9 @@ if file1 and file2:
                 chars1 = extract_characters_with_positions(file1, i)
                 chars2 = extract_characters_with_positions(file2, i)
                 
-                # Create raw text streams to feed into the sequence comparison engine
                 str1 = [c["text_lower"] for c in chars1]
                 str2 = [c["text_lower"] for c in chars2]
                 
-                # SequenceMatcher aligns strings character-by-character sequentially
                 matcher = difflib.SequenceMatcher(None, str1, str2)
                 
                 overlay1 = img1.copy()
@@ -85,13 +85,13 @@ if file1 and file2:
                 
                 for tag, i1, i2, j1, j2 in matcher.get_opcodes():
                     if tag != 'equal':
-                        # Symmetrical Highlights: Left Side Changes
+                        # Highlights: Left Side Changes
                         for idx in range(i1, i2):
                             if idx < len(chars1):
                                 b = chars1[idx]["bbox"]
                                 cv2.rectangle(overlay1, (b[0], b[1]), (b[2], b[3]), bgr_color, -1)
                         
-                        # Symmetrical Highlights: Right Side Changes
+                        # Highlights: Right Side Changes
                         for idx in range(j1, j2):
                             if idx < len(chars2):
                                 b = chars2[idx]["bbox"]
