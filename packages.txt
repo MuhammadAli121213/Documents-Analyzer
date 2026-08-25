@@ -1,1 +1,1 @@
-poppler-utils
+pip install streamlit pymupdf pandas
