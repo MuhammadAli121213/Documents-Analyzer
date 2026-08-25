@@ -105,11 +105,11 @@ if file1 and file2:
                         for idx in range(i1, i2):
                             if idx < len(words1):
                                 b = words1[idx]["bbox"]
-                                cv2.rectangle(auto_overlay1, (b[0], b[1]), (b[2], b[3]), yellow_bgr, -1)
+                                cv2.rectangle(auto_overlay1, (b, b), (b, b), yellow_bgr, -1)
                         for idx in range(j1, j2):
                             if idx < len(words2):
                                 b = words2[idx]["bbox"]
-                                cv2.rectangle(auto_overlay2, (b[0], b[1]), (b[2], b[3]), yellow_bgr, -1)
+                                cv2.rectangle(auto_overlay2, (b, b), (b, b), yellow_bgr, -1)
                 
                 # Blend the auto highlights into clean translucent sheets
                 base_processed1 = cv2.addWeighted(img1, 0.6, auto_overlay1, 0.4, 0)
@@ -123,28 +123,36 @@ if file1 and file2:
                 pil_background1 = Image.fromarray(from_array_rgb)
                 pil_background2 = Image.fromarray(from_array_rgb_2)
                 
+                # Extract explicit dimensional parameters from PIL object references
+                canvas_h = int(pil_background1.height)
+                canvas_w = int(pil_background1.width)
+                
                 disp_col1, disp_col2 = st.columns(2)
                 
                 with disp_col1:
                     st.caption("Original Version (Auto-Highlighted + Manual Editor)")
-                    # FIXED: Canvas automatically uses the background image dimensions internally
+                    # FIXED: Passing explicit object properties safely handles library internal queries
                     canvas1 = st_canvas(
                         fill_color="rgba(255, 87, 34, 0.2)",
                         stroke_width=stroke_width,
                         stroke_color=full_stroke_color,
                         background_image=pil_background1,
+                        height=canvas_h,
+                        width=canvas_w,
                         drawing_mode=drawing_mode,
                         key=f"c_orig_{i}",
                     )
                 
                 with disp_col2:
                     st.caption("Revised Version (Auto-Highlighted + Manual Editor)")
-                    # FIXED: Canvas automatically uses the background image dimensions internally
+                    # FIXED: Passing explicit object properties safely handles library internal queries
                     canvas2 = st_canvas(
                         fill_color="rgba(255, 87, 34, 0.2)",
                         stroke_width=stroke_width,
                         stroke_color=full_stroke_color,
                         background_image=pil_background2,
+                        height=canvas_h,
+                        width=canvas_w,
                         drawing_mode=drawing_mode,
                         key=f"c_rev_{i}",
                     )
